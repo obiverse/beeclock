@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Beeclock WASM</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <header class="hero">
+        <div class="hero-text">
+          <p class="eyebrow">Beeclock</p>
+          <h1>WASM Wall Clock</h1>
+          <p class="sub">Rust CSP ticks driving a canvas widget.</p>
+        </div>
+        <div class="hero-card">
+          <div class="card-label">Engine</div>
+          <div class="card-value">Partitioned clock</div>
+          <div class="card-note">sec / min / hour + pulses</div>
+        </div>
+      </header>
+
+      <section class="stage">
+        <div class="clock-shell">
+          <canvas id="clock" width="420" height="420" aria-label="Analog clock"></canvas>
+        </div>
+        <div class="panel">
+          <div class="panel-block">
+            <div class="label">Time</div>
+            <div class="time" id="time">00:00:00</div>
+          </div>
+          <div class="panel-block">
+            <div class="label">Tick</div>
+            <div class="tick" id="tick">0</div>
+          </div>
+          <div class="panel-block">
+            <div class="label">Pulses</div>
+            <div class="pulses" id="pulses">None yet</div>
+          </div>
+          <div class="panel-block perf-block" id="perf-block">
+            <div class="label">Perf</div>
+            <div class="perf" id="perf">Enable with ?profile=1</div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <div>Partitions: sec=60, min=60, hour=24</div>
+        <div>Pulses: fast=5, wireguard=21, slow=1234, top_of_hour</div>
+      </footer>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

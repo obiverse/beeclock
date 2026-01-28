@@ -1,0 +1,75 @@
+<section class="clock-page">
+  <!-- Canvas Clock -->
+  <div class="canvas-container">
+    <clock-canvas #clockCanvas [showDebug]="showDebug()"></clock-canvas>
+  </div>
+
+  <!-- Controls -->
+  <div class="controls">
+    <!-- Skin selector -->
+    <div class="skin-selector">
+      <label>Skin:</label>
+      <select (change)="selectSkin($any($event.target).value)">
+        @for (skin of skins(); track skin.id) {
+          <option [value]="skin.id">{{ skin.name }}</option>
+        }
+      </select>
+      <button (click)="nextSkin()" class="btn-next">Next</button>
+    </div>
+
+    <!-- Auto-rotate -->
+    <div class="auto-rotate">
+      <label>
+        <input
+          type="checkbox"
+          [checked]="autoRotate()"
+          (change)="toggleAutoRotate()"
+        >
+        Auto-rotate
+      </label>
+      <input
+        type="range"
+        min="3"
+        max="30"
+        [value]="rotationInterval()"
+        (input)="setRotationInterval($any($event.target).valueAsNumber)"
+        [disabled]="!autoRotate()"
+      >
+      <span class="interval">{{ rotationInterval() }}s</span>
+    </div>
+
+    <!-- Debug toggle -->
+    <div class="debug-toggle">
+      <label>
+        <input
+          type="checkbox"
+          [checked]="showDebug()"
+          (change)="toggleDebug()"
+        >
+        Debug
+      </label>
+    </div>
+  </div>
+
+  <!-- Digital display (small) -->
+  <div class="digital">
+    <span class="hour">{{ time().hour | number:'2.0-0' }}</span>
+    <span class="separator">:</span>
+    <span class="minute">{{ time().min | number:'2.0-0' }}</span>
+    <span class="separator">:</span>
+    <span class="second">{{ time().sec | number:'2.0-0' }}</span>
+  </div>
+
+  <!-- Example Loaders -->
+  <div class="loaders-section">
+    <h3 class="section-title">Example Loaders</h3>
+    <p class="section-desc">AnimatedLoader wraps any skin with progress tracking. These loop every N seconds.</p>
+    <div class="loaders-grid">
+      @for (loader of exampleLoaders; track loader.id) {
+        <div class="loader-cell">
+          <loader-canvas [loader]="loader"></loader-canvas>
+        </div>
+      }
+    </div>
+  </div>
+</section>

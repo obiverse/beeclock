@@ -1,0 +1,19 @@
+[package]
+name = "beeclock-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Logical clock with partitioned time and predicate pulses"
+repository = "https://github.com/obiverse/beeclock"
+keywords = ["clock", "time", "tick", "partition", "pulse"]
+categories = ["date-and-time", "no-std"]
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+# No dependencies - pure Rust, no_std compatible
+
+[dev-dependencies]
+# Test dependencies only
