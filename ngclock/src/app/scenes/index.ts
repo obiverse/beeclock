@@ -17,6 +17,15 @@ import {
   CAGrid,
   AIAgent,
   EmergentState,
+  NtorowaState,
+  JumperState,
+  JumperAction,
+  RopeState,
+  TimingFeedback,
+  TimingGrade,
+  KENTE_COLORS,
+  TIMING_WINDOWS,
+  JUMPER_ACTION_DATA,
 } from '../core/framework/scenes';
 import { FrameContext, TAU } from '../core/framework';
 import { LayoutZones, renderPanelFrame } from '../core/framework/scenes/layout';
@@ -170,6 +179,9 @@ export function render2DScene(
       break;
     case 'about':
       render2DAbout(ctx, state, frame, viewport);
+      break;
+    case 'ntorowa':
+      render2DNtorowa(ctx, state, frame, viewport);
       break;
   }
 
@@ -1969,6 +1981,9 @@ export function render3DScene(
     case 'about':
       render3DAbout(r, state, frame);
       break;
+    case 'ntorowa':
+      render3DNtorowa(r, state, frame);
+      break;
   }
 
   r.render();
@@ -2229,4 +2244,662 @@ function drawHand(
 
 function pad(n: number): string {
   return n.toString().padStart(2, '0');
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ntorowa Jump Rope Game - 2D Rendering
+// ─────────────────────────────────────────────────────────────
+
+function render2DNtorowa(
+  ctx: CanvasRenderingContext2D,
+  state: AppState,
+  frame: FrameContext,
+  vp: Viewport
+): void {
+  const ntorowa = state.ntorowa;
+  const cx = vp.x + vp.width / 2;
+  const groundY = vp.y + vp.height * 0.78;
+  const ropeHalfWidth = Math.min(vp.width * 0.35, 180);
+
+  // 1. Draw background
+  drawNtorowaBackground(ctx, vp, frame.t);
+
+  // 2. Calculate smooth rope angle using accumulator + alpha
+  const msPerPhase = 60000 / ntorowa.rope.bpm / 4;
+  const smoothPhase = ntorowa.rope.phase + (ntorowa.rope.accumulator / msPerPhase);
+  const ropeAngle = (smoothPhase / 4) * TAU;
+
+  // 3. Draw rope turners
+  drawRopeTurner(ctx, cx - ropeHalfWidth - 30, groundY, ropeAngle, 'left');
+  drawRopeTurner(ctx, cx + ropeHalfWidth + 30, groundY, ropeAngle, 'right');
+
+  // 4. Draw rope
+  drawNtorowaRope(ctx, cx, groundY, ropeAngle, ropeHalfWidth);
+
+  // 5. Draw jumper
+  drawNtorowaJumper(ctx, ntorowa.jumper, cx, groundY, frame.t);
+
+  // 6. Draw particles
+  drawNtorowaParticles(ctx, ntorowa.particles, vp);
+
+  // 7. Draw timing feedback
+  if (ntorowa.feedback && ntorowa.feedback.time > 0) {
+    drawTimingFeedback(ctx, ntorowa.feedback, cx, groundY - ntorowa.jumper.y - 100);
+  }
+
+  // 8. Draw UI
+  drawNtorowaUI(ctx, ntorowa, vp);
+
+  // 9. Draw game over screen
+  if (ntorowa.gameOver) {
+    drawNtorowaGameOver(ctx, ntorowa, vp);
+  }
+
+  // 10. Draw tutorial if active
+  if (ntorowa.showTutorial && !ntorowa.gameOver) {
+    drawNtorowaTutorial(ctx, vp);
+  }
+}
+
+function drawNtorowaBackground(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport,
+  t: number
+): void {
+  // Sky gradient (African sunset)
+  const skyGradient = ctx.createLinearGradient(vp.x, vp.y, vp.x, vp.y + vp.height);
+  skyGradient.addColorStop(0, '#1a1a2e');
+  skyGradient.addColorStop(0.4, '#16213e');
+  skyGradient.addColorStop(0.7, '#e94560');
+  skyGradient.addColorStop(1, '#0f3460');
+  ctx.fillStyle = skyGradient;
+  ctx.fillRect(vp.x, vp.y, vp.width, vp.height);
+
+  // Stars
+  ctx.fillStyle = 'white';
+  for (let i = 0; i < 30; i++) {
+    const seed = i * 137.5;
+    const sx = vp.x + (Math.sin(seed) * 0.5 + 0.5) * vp.width;
+    const sy = vp.y + (Math.cos(seed * 0.7) * 0.3) * vp.height;
+    const twinkle = Math.sin(t * 3 + i) * 0.3 + 0.7;
+    ctx.globalAlpha = twinkle * 0.8;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 1 + Math.sin(seed) * 0.5, 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Ground
+  const groundY = vp.y + vp.height * 0.78;
+  const groundGradient = ctx.createLinearGradient(vp.x, groundY, vp.x, vp.y + vp.height);
+  groundGradient.addColorStop(0, KENTE_COLORS.earth);
+  groundGradient.addColorStop(1, '#3d2314');
+  ctx.fillStyle = groundGradient;
+  ctx.fillRect(vp.x, groundY + 5, vp.width, vp.height - groundY);
+
+  // Kente border pattern
+  const patternY = groundY;
+  const stripeWidth = 30;
+  const stripeHeight = 8;
+  const kenteColors = [KENTE_COLORS.gold, KENTE_COLORS.red, KENTE_COLORS.green, KENTE_COLORS.black];
+
+  for (let i = 0; i < Math.ceil(vp.width / stripeWidth); i++) {
+    ctx.fillStyle = kenteColors[i % kenteColors.length];
+    ctx.fillRect(vp.x + i * stripeWidth, patternY - stripeHeight, stripeWidth, stripeHeight);
+  }
+}
+
+function drawRopeTurner(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  groundY: number,
+  ropeAngle: number,
+  side: 'left' | 'right'
+): void {
+  const armSwing = Math.sin(ropeAngle) * 12;
+  const mirrorX = side === 'left' ? 1 : -1;
+
+  ctx.save();
+  ctx.translate(x, groundY);
+
+  // Body
+  ctx.fillStyle = KENTE_COLORS.orange;
+  ctx.beginPath();
+  ctx.ellipse(0, -50, 18, 25, 0, 0, TAU);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = KENTE_COLORS.earth;
+  ctx.beginPath();
+  ctx.arc(0, -90, 22, 0, TAU);
+  ctx.fill();
+
+  // Head wrap
+  ctx.fillStyle = KENTE_COLORS.purple;
+  ctx.beginPath();
+  ctx.ellipse(0, -105, 20, 12, 0, 0, Math.PI);
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.arc(-7, -92, 4, 0, TAU);
+  ctx.arc(7, -92, 4, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = KENTE_COLORS.black;
+  ctx.beginPath();
+  ctx.arc(-7, -92, 2, 0, TAU);
+  ctx.arc(7, -92, 2, 0, TAU);
+  ctx.fill();
+
+  // Smile
+  ctx.strokeStyle = KENTE_COLORS.black;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, -85, 8, 0.2, Math.PI - 0.2);
+  ctx.stroke();
+
+  // Arm (holding rope)
+  ctx.strokeStyle = KENTE_COLORS.earth;
+  ctx.lineWidth = 10;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(mirrorX * 15, -55);
+  ctx.lineTo(mirrorX * (35 + armSwing), -70 + Math.cos(ropeAngle) * 10);
+  ctx.stroke();
+
+  // Legs
+  ctx.strokeStyle = KENTE_COLORS.black;
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.moveTo(-10, -25);
+  ctx.lineTo(-12, 0);
+  ctx.moveTo(10, -25);
+  ctx.lineTo(12, 0);
+  ctx.stroke();
+
+  // Feet
+  ctx.fillStyle = KENTE_COLORS.red;
+  ctx.beginPath();
+  ctx.ellipse(-12, 5, 12, 6, 0, 0, TAU);
+  ctx.ellipse(12, 5, 12, 6, 0, 0, TAU);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function drawNtorowaRope(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  groundY: number,
+  angle: number,
+  halfWidth: number
+): void {
+  // Rope Y at center based on rotation
+  // angle 0 = right, PI/2 = top, PI = left, 3PI/2 = bottom
+  const amplitude = 100;
+  const ropeY = Math.sin(angle - Math.PI / 2) * amplitude;
+
+  // Rope curve using quadratic bezier
+  ctx.beginPath();
+  ctx.moveTo(cx - halfWidth, groundY - 70);
+  ctx.quadraticCurveTo(cx, groundY + ropeY, cx + halfWidth, groundY - 70);
+
+  // Kente-colored rope gradient
+  const gradient = ctx.createLinearGradient(cx - halfWidth, 0, cx + halfWidth, 0);
+  gradient.addColorStop(0, KENTE_COLORS.gold);
+  gradient.addColorStop(0.25, KENTE_COLORS.red);
+  gradient.addColorStop(0.5, KENTE_COLORS.green);
+  gradient.addColorStop(0.75, KENTE_COLORS.blue);
+  gradient.addColorStop(1, KENTE_COLORS.gold);
+
+  ctx.strokeStyle = gradient;
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  // Glow when rope is at danger zone (near bottom)
+  const normalizedAngle = ((angle % TAU) + TAU) % TAU;
+  const isNearBottom = normalizedAngle > Math.PI * 1.3 && normalizedAngle < Math.PI * 1.7;
+
+  if (isNearBottom) {
+    ctx.shadowColor = KENTE_COLORS.red;
+    ctx.shadowBlur = 15;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawNtorowaJumper(
+  ctx: CanvasRenderingContext2D,
+  jumper: JumperState,
+  cx: number,
+  groundY: number,
+  t: number
+): void {
+  ctx.save();
+  ctx.translate(cx, groundY - jumper.y);
+
+  // Shadow on ground
+  const shadowScale = Math.max(0.2, 1 - jumper.y / 200);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.beginPath();
+  ctx.ellipse(0, jumper.y, 25 * shadowScale, 8 * shadowScale, 0, 0, TAU);
+  ctx.fill();
+
+  // Squash/stretch based on action
+  let scaleX = 1;
+  let scaleY = 1;
+
+  switch (jumper.action) {
+    case 'crouch':
+      scaleX = 1.25;
+      scaleY = 0.75;
+      break;
+    case 'ascending':
+      scaleX = 0.85;
+      scaleY = 1.2;
+      break;
+    case 'apex':
+      scaleX = 0.95;
+      scaleY = 1.05;
+      break;
+    case 'descending':
+      scaleX = 0.88;
+      scaleY = 1.15;
+      break;
+    case 'landing':
+      const progress = jumper.actionTime / JUMPER_ACTION_DATA.landing.duration;
+      scaleX = 1.3 - progress * 0.3;
+      scaleY = 0.7 + progress * 0.3;
+      break;
+    case 'hit':
+      const shake = Math.sin(jumper.actionTime * 0.08) * 4;
+      ctx.translate(shake, 0);
+      break;
+  }
+
+  ctx.scale(scaleX, scaleY);
+
+  // Body
+  ctx.fillStyle = KENTE_COLORS.green;
+  ctx.beginPath();
+  ctx.ellipse(0, -35, 22, 28, 0, 0, TAU);
+  ctx.fill();
+
+  // Head
+  ctx.fillStyle = KENTE_COLORS.earth;
+  ctx.beginPath();
+  ctx.arc(0, -80, 25, 0, TAU);
+  ctx.fill();
+
+  // Hair
+  ctx.fillStyle = KENTE_COLORS.black;
+  ctx.beginPath();
+  ctx.ellipse(0, -98, 22, 15, 0, 0, Math.PI);
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.arc(-9, -82, 5, 0, TAU);
+  ctx.arc(9, -82, 5, 0, TAU);
+  ctx.fill();
+  ctx.fillStyle = KENTE_COLORS.black;
+  ctx.beginPath();
+  ctx.arc(-9, -82, 2.5, 0, TAU);
+  ctx.arc(9, -82, 2.5, 0, TAU);
+  ctx.fill();
+
+  // Expression based on action
+  ctx.strokeStyle = KENTE_COLORS.black;
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  if (jumper.action === 'hit') {
+    // X eyes
+    ctx.beginPath();
+    ctx.moveTo(-12, -85);
+    ctx.lineTo(-6, -79);
+    ctx.moveTo(-6, -85);
+    ctx.lineTo(-12, -79);
+    ctx.moveTo(6, -85);
+    ctx.lineTo(12, -79);
+    ctx.moveTo(12, -85);
+    ctx.lineTo(6, -79);
+    ctx.stroke();
+  } else if (jumper.action === 'ascending' || jumper.action === 'apex') {
+    // Happy open mouth
+    ctx.fillStyle = KENTE_COLORS.black;
+    ctx.beginPath();
+    ctx.ellipse(0, -68, 8, 6, 0, 0, TAU);
+    ctx.fill();
+  } else {
+    // Neutral smile
+    ctx.beginPath();
+    ctx.arc(0, -72, 10, 0.2, Math.PI - 0.2);
+    ctx.stroke();
+  }
+
+  // Arms
+  ctx.strokeStyle = KENTE_COLORS.earth;
+  ctx.lineWidth = 10;
+  const armY = jumper.action === 'ascending' || jumper.action === 'apex' ? -20 : -45;
+  ctx.beginPath();
+  ctx.moveTo(-22, -40);
+  ctx.lineTo(-38, armY);
+  ctx.moveTo(22, -40);
+  ctx.lineTo(38, armY);
+  ctx.stroke();
+
+  // Legs
+  ctx.strokeStyle = KENTE_COLORS.earth;
+  ctx.lineWidth = 12;
+  const legSpread = jumper.action === 'ascending' ? 8 : jumper.action === 'descending' ? 12 : 5;
+  ctx.beginPath();
+  ctx.moveTo(-10, -10);
+  ctx.lineTo(-10 - legSpread, 15);
+  ctx.moveTo(10, -10);
+  ctx.lineTo(10 + legSpread, 15);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawNtorowaParticles(
+  ctx: CanvasRenderingContext2D,
+  particles: Particle[],
+  vp: Viewport
+): void {
+  for (const p of particles) {
+    if (p.life <= 0) continue;
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawTimingFeedback(
+  ctx: CanvasRenderingContext2D,
+  feedback: TimingFeedback,
+  x: number,
+  y: number
+): void {
+  const fadeTime = 500;
+  const alpha = Math.min(1, feedback.time / fadeTime);
+  const scale = 1 + (1 - alpha) * 0.3;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.globalAlpha = alpha;
+
+  let color: string;
+  let text: string;
+  let fontSize: number;
+
+  switch (feedback.grade) {
+    case 'perfect':
+      color = KENTE_COLORS.gold;
+      text = 'PERFECT!';
+      fontSize = 32;
+      break;
+    case 'good':
+      color = KENTE_COLORS.green;
+      text = 'GOOD!';
+      fontSize = 28;
+      break;
+    case 'ok':
+      color = KENTE_COLORS.blue;
+      text = 'OK';
+      fontSize = 24;
+      break;
+    case 'miss':
+      color = KENTE_COLORS.red;
+      text = 'MISS!';
+      fontSize = 28;
+      break;
+  }
+
+  // Text shadow
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.font = `bold ${fontSize}px system-ui`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 2, 2);
+
+  // Main text
+  ctx.fillStyle = color;
+  ctx.fillText(text, 0, 0);
+
+  // Points
+  if (feedback.points > 0) {
+    ctx.font = 'bold 18px system-ui';
+    ctx.fillStyle = 'white';
+    ctx.fillText(`+${feedback.points}`, 0, 25);
+  }
+
+  ctx.restore();
+}
+
+function drawNtorowaUI(
+  ctx: CanvasRenderingContext2D,
+  ntorowa: NtorowaState,
+  vp: Viewport
+): void {
+  // Score (top left)
+  ctx.fillStyle = KENTE_COLORS.gold;
+  ctx.font = 'bold 28px system-ui';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(ntorowa.score.toString(), vp.x + 20, vp.y + 20);
+
+  // Combo (below score)
+  if (ntorowa.combo > 1) {
+    ctx.fillStyle = KENTE_COLORS.orange;
+    ctx.font = 'bold 20px system-ui';
+    ctx.fillText(`${ntorowa.combo}x COMBO`, vp.x + 20, vp.y + 55);
+  }
+
+  // Level and BPM (top right)
+  ctx.fillStyle = KENTE_COLORS.cream;
+  ctx.font = '16px system-ui';
+  ctx.textAlign = 'right';
+  ctx.fillText(`Level ${ntorowa.level}`, vp.x + vp.width - 20, vp.y + 20);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+  ctx.font = '14px monospace';
+  ctx.fillText(`${ntorowa.rope.bpm} BPM`, vp.x + vp.width - 20, vp.y + 42);
+
+  // Jumps to next level
+  const remaining = ntorowa.jumpsToNextLevel - ntorowa.jumpCount;
+  if (remaining > 0 && remaining < 100) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+    ctx.font = '12px system-ui';
+    ctx.fillText(`${remaining} jumps to level up`, vp.x + vp.width - 20, vp.y + 62);
+  }
+
+  // Controls hint (bottom)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+  ctx.font = '12px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillText(
+    'SPACE/UP: Jump | R: Restart | T: Tutorial',
+    vp.x + vp.width / 2,
+    vp.y + vp.height - 15
+  );
+}
+
+function drawNtorowaGameOver(
+  ctx: CanvasRenderingContext2D,
+  ntorowa: NtorowaState,
+  vp: Viewport
+): void {
+  // Dim overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(vp.x, vp.y, vp.width, vp.height);
+
+  const cx = vp.x + vp.width / 2;
+  const cy = vp.y + vp.height / 2;
+
+  // Game Over title
+  ctx.fillStyle = KENTE_COLORS.red;
+  ctx.font = 'bold 42px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('ROPE CAUGHT!', cx, cy - 80);
+
+  // Final score
+  ctx.fillStyle = KENTE_COLORS.gold;
+  ctx.font = 'bold 56px system-ui';
+  ctx.fillText(ntorowa.score.toString(), cx, cy);
+
+  ctx.fillStyle = KENTE_COLORS.cream;
+  ctx.font = '18px system-ui';
+  ctx.fillText('FINAL SCORE', cx, cy + 40);
+
+  // Stats
+  ctx.fillStyle = KENTE_COLORS.orange;
+  ctx.font = '22px system-ui';
+  ctx.fillText(`Best Combo: ${ntorowa.maxCombo}x`, cx, cy + 90);
+  ctx.fillText(`Perfects: ${ntorowa.perfectCount}`, cx, cy + 120);
+
+  // Restart prompt
+  ctx.fillStyle = KENTE_COLORS.gold;
+  ctx.font = 'bold 20px system-ui';
+  ctx.fillText('Press SPACE or R to restart', cx, cy + 170);
+}
+
+function drawNtorowaTutorial(
+  ctx: CanvasRenderingContext2D,
+  vp: Viewport
+): void {
+  const cx = vp.x + vp.width / 2;
+  const cy = vp.y + vp.height / 2;
+
+  // Semi-transparent overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(vp.x, vp.y, vp.width, vp.height);
+
+  // Title
+  ctx.fillStyle = KENTE_COLORS.gold;
+  ctx.font = 'bold 36px system-ui';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('NTOROWA', cx, cy - 100);
+
+  ctx.fillStyle = KENTE_COLORS.cream;
+  ctx.font = '18px system-ui';
+  ctx.fillText('The Rhythm of Ropes', cx, cy - 60);
+
+  // Instructions
+  ctx.font = '16px system-ui';
+  ctx.fillText('Press SPACE or UP to jump when the rope comes down', cx, cy);
+  ctx.fillText('Time your jumps for PERFECT scores!', cx, cy + 30);
+
+  // Kente divider
+  const dividerY = cy + 70;
+  const colors = [KENTE_COLORS.gold, KENTE_COLORS.red, KENTE_COLORS.green, KENTE_COLORS.blue];
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.fillRect(cx - 100 + i * 25, dividerY, 25, 6);
+  }
+
+  // Start prompt
+  ctx.fillStyle = KENTE_COLORS.gold;
+  ctx.font = 'bold 22px system-ui';
+  ctx.fillText('Press SPACE to start!', cx, cy + 120);
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+  ctx.font = '14px system-ui';
+  ctx.fillText('Press T to toggle this tutorial', cx, cy + 150);
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ntorowa Jump Rope Game - 3D Rendering
+// ─────────────────────────────────────────────────────────────
+
+function render3DNtorowa(
+  r: ThreeRenderer,
+  state: AppState,
+  frame: FrameContext
+): void {
+  const ntorowa = state.ntorowa;
+  const t = frame.elapsed;
+
+  // Ground plane
+  r.box(0, -0.5, 0, 10, 0.2, 10, {
+    color: KENTE_COLORS.earth,
+    metalness: 0.2,
+    roughness: 0.8,
+  });
+
+  // Kente pattern on ground
+  const colors = [KENTE_COLORS.gold, KENTE_COLORS.red, KENTE_COLORS.green, KENTE_COLORS.black];
+  for (let i = 0; i < 8; i++) {
+    r.box(-3.5 + i, -0.35, 4, 0.8, 0.05, 0.5, {
+      color: colors[i % colors.length],
+      metalness: 0.3,
+    });
+  }
+
+  // Rope turners (simple cylinders)
+  r.cylinder(-3, 1, 0, 0.5, 2.5, {
+    color: KENTE_COLORS.orange,
+    metalness: 0.3,
+  });
+  r.sphere(-3, 2.5, 0, 0.4, { color: KENTE_COLORS.earth });
+
+  r.cylinder(3, 1, 0, 0.5, 2.5, {
+    color: KENTE_COLORS.orange,
+    metalness: 0.3,
+  });
+  r.sphere(3, 2.5, 0, 0.4, { color: KENTE_COLORS.earth });
+
+  // Rope (approximated with spheres)
+  const msPerPhase = 60000 / ntorowa.rope.bpm / 4;
+  const smoothPhase = ntorowa.rope.phase + (ntorowa.rope.accumulator / msPerPhase);
+  const ropeAngle = (smoothPhase / 4) * TAU;
+  const ropeY = Math.sin(ropeAngle - Math.PI / 2) * 2 + 1.5;
+
+  const ropeSegments = 10;
+  for (let i = 0; i <= ropeSegments; i++) {
+    const progress = i / ropeSegments;
+    const x = -3 + progress * 6;
+    const sag = Math.sin(progress * Math.PI) * (ropeY - 2.5);
+    const y = 2.5 + sag;
+    const colorIndex = i % colors.length;
+
+    r.sphere(x, y, 0, 0.08, {
+      color: colors[colorIndex],
+      emissive: colors[colorIndex],
+    });
+  }
+
+  // Jumper
+  const jumperY = ntorowa.jumper.y / 40;
+  r.cylinder(0, 0.8 + jumperY, 0, 0.4, 1.2, {
+    color: KENTE_COLORS.green,
+    metalness: 0.3,
+  });
+  r.sphere(0, 1.8 + jumperY, 0, 0.35, {
+    color: KENTE_COLORS.earth,
+  });
+
+  // Ambient particles
+  for (let i = 0; i < 20; i++) {
+    const seed = i * 137.5;
+    const px = Math.sin(seed + t * 0.5) * 4;
+    const pz = Math.cos(seed * 0.7 + t * 0.3) * 4;
+    const py = (((seed + t * 10) % 8) - 2);
+    const pulse = Math.sin(t * 2 + i) * 0.5 + 0.5;
+
+    if (pulse > 0.3) {
+      r.sphere(px, py, pz, 0.05, {
+        color: colors[i % colors.length],
+        emissive: colors[i % colors.length],
+      });
+    }
+  }
 }

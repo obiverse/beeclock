@@ -23,9 +23,17 @@ import { ThreeRenderer } from './core/renderer/three-renderer';
 import {
   AppState,
   createAppState,
+  createNtorowaState,
   SceneId,
   ViewMode,
   NAV_ITEMS,
+  NtorowaState,
+  JumperAction,
+  JUMPER_ACTION_DATA,
+  DIFFICULTY_LEVELS,
+  TIMING_WINDOWS,
+  KENTE_COLORS,
+  Particle,
 } from './core/framework/scenes';
 import { FrameContext } from './core/framework';
 import {
@@ -278,6 +286,11 @@ export class BeeApp implements OnInit, OnDestroy {
       this.updateFighterState(delta);
     }
 
+    // Update Ntorowa game state
+    if (this.state.currentScene === 'ntorowa') {
+      this.updateNtorowaState(delta);
+    }
+
     // Update emergent systems (Studio scene)
     if (this.state.currentScene === 'studio') {
       const worldWidth = this.layout.left.width || 800;
@@ -377,9 +390,10 @@ export class BeeApp implements OnInit, OnDestroy {
     if (e.key === '1') this.switchScene('home');
     else if (e.key === '2') this.switchScene('anime');
     else if (e.key === '3') this.switchScene('fighter');
-    else if (e.key === '4') this.switchScene('studio');
-    else if (e.key === '5') this.switchScene('lab');
-    else if (e.key === '6') this.switchScene('about');
+    else if (e.key === '4') this.switchScene('ntorowa');
+    else if (e.key === '5') this.switchScene('studio');
+    else if (e.key === '6') this.switchScene('lab');
+    else if (e.key === '7') this.switchScene('about');
 
     // View mode toggle
     else if (e.key === 'v') {
@@ -408,6 +422,8 @@ export class BeeApp implements OnInit, OnDestroy {
       }
     } else if (this.state.currentScene === 'fighter') {
       this.handleFighterInput(e.key);
+    } else if (this.state.currentScene === 'ntorowa') {
+      this.handleNtorowaInput(e.key);
     } else if (this.state.currentScene === 'studio') {
       this.handleStudioInput(e.key);
     }
@@ -604,6 +620,284 @@ export class BeeApp implements OnInit, OnDestroy {
       hitstun: { duration: 300, next: 'idle' },
     };
     return data[action] || { duration: 0, next: 'idle' };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Ntorowa Game Logic
+  // ─────────────────────────────────────────────────────────────
+
+  private handleNtorowaInput(key: string): void {
+    const ntorowa = this.state.ntorowa;
+
+    // Jump input
+    if (key === ' ' || key === 'ArrowUp') {
+      if (ntorowa.gameOver) {
+        // Restart game
+        Object.assign(ntorowa, createNtorowaState());
+        ntorowa.showTutorial = false;
+        return;
+      }
+
+      if (ntorowa.showTutorial) {
+        // Start game
+        ntorowa.showTutorial = false;
+        return;
+      }
+
+      // Initiate jump if on ground
+      if (ntorowa.jumper.action === 'ground') {
+        ntorowa.jumper.action = 'crouch';
+        ntorowa.jumper.actionTime = 0;
+        ntorowa.jumper.jumpHeight = 120;
+        ntorowa.gradeAwarded = false;
+      }
+    }
+
+    // Reset game
+    if (key === 'r' || key === 'R') {
+      Object.assign(ntorowa, createNtorowaState());
+      ntorowa.showTutorial = false;
+    }
+
+    // Toggle tutorial
+    if (key === 't' || key === 'T') {
+      if (!ntorowa.gameOver) {
+        ntorowa.showTutorial = !ntorowa.showTutorial;
+      }
+    }
+  }
+
+  private updateNtorowaState(deltaMs: number): void {
+    const ntorowa = this.state.ntorowa;
+
+    // Don't update if game over or tutorial showing
+    if (ntorowa.gameOver || ntorowa.showTutorial) {
+      return;
+    }
+
+    // Update rope rotation
+    this.updateNtorowaRope(ntorowa, deltaMs);
+
+    // Update jumper state machine
+    this.updateNtorowaJumper(ntorowa, deltaMs);
+
+    // Check collision and timing
+    this.checkNtorowaCollision(ntorowa);
+
+    // Update particles
+    this.updateNtorowaParticles(ntorowa, deltaMs);
+
+    // Update feedback timer
+    if (ntorowa.feedback && ntorowa.feedback.time > 0) {
+      ntorowa.feedback.time -= deltaMs;
+    }
+  }
+
+  private updateNtorowaRope(ntorowa: NtorowaState, deltaMs: number): void {
+    const rope = ntorowa.rope;
+    const msPerPhase = 60000 / rope.bpm / 4;
+
+    rope.accumulator += deltaMs;
+
+    // Advance phase when accumulator exceeds threshold
+    while (rope.accumulator >= msPerPhase) {
+      rope.accumulator -= msPerPhase;
+      rope.phase = (rope.phase + 1) % 4;
+    }
+  }
+
+  private updateNtorowaJumper(ntorowa: NtorowaState, deltaMs: number): void {
+    const jumper = ntorowa.jumper;
+    const gravity = 0.0012;
+
+    jumper.actionTime += deltaMs;
+
+    switch (jumper.action) {
+      case 'ground':
+        // Ready for input
+        break;
+
+      case 'crouch':
+        // Startup frames
+        if (jumper.actionTime >= JUMPER_ACTION_DATA.crouch.duration) {
+          jumper.action = 'ascending';
+          jumper.actionTime = 0;
+          jumper.vy = -0.5; // Negative = up
+          this.spawnNtorowaParticles(ntorowa, 0, 0, KENTE_COLORS.earth, 5);
+        }
+        break;
+
+      case 'ascending':
+        jumper.vy += gravity * deltaMs;
+        jumper.y -= jumper.vy * deltaMs;
+
+        if (jumper.vy >= 0) {
+          jumper.action = 'apex';
+          jumper.actionTime = 0;
+        }
+        break;
+
+      case 'apex':
+        jumper.vy += gravity * deltaMs * 0.5;
+        jumper.y -= jumper.vy * deltaMs;
+
+        if (jumper.actionTime >= JUMPER_ACTION_DATA.apex.duration) {
+          jumper.action = 'descending';
+          jumper.actionTime = 0;
+        }
+        break;
+
+      case 'descending':
+        jumper.vy += gravity * deltaMs;
+        jumper.y -= jumper.vy * deltaMs;
+
+        if (jumper.y <= 0) {
+          jumper.y = 0;
+          jumper.vy = 0;
+          jumper.action = 'landing';
+          jumper.actionTime = 0;
+          this.spawnNtorowaParticles(ntorowa, 0, 0, KENTE_COLORS.earth, 3);
+        }
+        break;
+
+      case 'landing':
+        if (jumper.actionTime >= JUMPER_ACTION_DATA.landing.duration) {
+          jumper.action = 'ground';
+          jumper.actionTime = 0;
+        }
+        break;
+
+      case 'hit':
+        if (jumper.actionTime >= JUMPER_ACTION_DATA.hit.duration) {
+          ntorowa.gameOver = true;
+        }
+        break;
+    }
+  }
+
+  private checkNtorowaCollision(ntorowa: NtorowaState): void {
+    const rope = ntorowa.rope;
+    const jumper = ntorowa.jumper;
+
+    // Calculate smooth phase for accurate collision
+    const msPerPhase = 60000 / rope.bpm / 4;
+    const smoothPhase = rope.phase + (rope.accumulator / msPerPhase);
+
+    // Rope is at danger zone when phase is around 2 (bottom)
+    const isDangerZone = smoothPhase > 1.7 && smoothPhase < 2.3;
+
+    // Check if jumper should be graded
+    if (isDangerZone && !ntorowa.gradeAwarded) {
+      ntorowa.gradeAwarded = true;
+
+      // Calculate distance from perfect timing (phase 2.0)
+      const phaseDistance = Math.abs(smoothPhase - 2.0);
+
+      if (jumper.y > 30) {
+        // Jumper is in the air - grade the timing
+        let grade: 'perfect' | 'good' | 'ok';
+        let points: number;
+
+        if (phaseDistance < TIMING_WINDOWS.perfect.range) {
+          grade = 'perfect';
+          points = 100;
+          ntorowa.perfectCount++;
+          ntorowa.combo++;
+          this.spawnNtorowaParticles(ntorowa, 0, -jumper.y - 50, KENTE_COLORS.gold, 15);
+        } else if (phaseDistance < TIMING_WINDOWS.good.range) {
+          grade = 'good';
+          points = 50;
+          ntorowa.combo++;
+          this.spawnNtorowaParticles(ntorowa, 0, -jumper.y - 50, KENTE_COLORS.green, 8);
+        } else {
+          grade = 'ok';
+          points = 10;
+          ntorowa.combo = 0;
+        }
+
+        // Apply combo multiplier
+        const comboMultiplier = Math.floor(ntorowa.combo / 5) + 1;
+        points *= comboMultiplier;
+
+        ntorowa.score += points;
+        ntorowa.jumpCount++;
+        ntorowa.maxCombo = Math.max(ntorowa.maxCombo, ntorowa.combo);
+
+        ntorowa.feedback = { grade, points, time: 800 };
+
+        // Check for level up
+        this.checkNtorowaLevelUp(ntorowa);
+
+      } else if (jumper.action !== 'hit' && jumper.action !== 'ascending' && jumper.action !== 'crouch') {
+        // Jumper is on ground during danger zone - hit!
+        jumper.action = 'hit';
+        jumper.actionTime = 0;
+        ntorowa.feedback = { grade: 'miss', points: 0, time: 800 };
+        ntorowa.combo = 0;
+        this.spawnNtorowaParticles(ntorowa, 0, -30, KENTE_COLORS.red, 10);
+      }
+    }
+
+    // Reset grade flag when leaving danger zone
+    if (smoothPhase > 2.5 || smoothPhase < 1.5) {
+      ntorowa.gradeAwarded = false;
+    }
+  }
+
+  private checkNtorowaLevelUp(ntorowa: NtorowaState): void {
+    const currentLevel = DIFFICULTY_LEVELS.find(l => l.level === ntorowa.level);
+    if (!currentLevel) return;
+
+    if (ntorowa.jumpCount >= ntorowa.jumpsToNextLevel) {
+      const nextLevel = DIFFICULTY_LEVELS.find(l => l.level === ntorowa.level + 1);
+      if (nextLevel) {
+        ntorowa.level = nextLevel.level;
+        ntorowa.rope.bpm = nextLevel.bpm;
+        ntorowa.jumpsToNextLevel = ntorowa.jumpCount + nextLevel.jumpsRequired;
+
+        // Level up particles
+        this.spawnNtorowaParticles(ntorowa, 0, -100, KENTE_COLORS.gold, 20);
+      }
+    }
+  }
+
+  private spawnNtorowaParticles(
+    ntorowa: NtorowaState,
+    x: number,
+    y: number,
+    color: string,
+    count: number
+  ): void {
+    // Get center position from layout
+    const cx = this.layout.left.x + this.layout.left.width / 2;
+    const groundY = this.layout.left.y + this.layout.left.height * 0.78;
+
+    for (let i = 0; i < count; i++) {
+      ntorowa.particles.push({
+        x: cx + x + (Math.random() - 0.5) * 20,
+        y: groundY + y,
+        vx: (Math.random() - 0.5) * 4,
+        vy: (Math.random() - 0.5) * 4 - 2,
+        life: 1,
+        maxLife: 1,
+        color,
+        size: 4 + Math.random() * 4,
+      });
+    }
+  }
+
+  private updateNtorowaParticles(ntorowa: NtorowaState, deltaMs: number): void {
+    const gravity = 0.0001;
+
+    for (const p of ntorowa.particles) {
+      p.x += p.vx * deltaMs * 0.05;
+      p.y += p.vy * deltaMs * 0.05;
+      p.vy += gravity * deltaMs;
+      p.life -= deltaMs / 1000;
+    }
+
+    // Remove dead particles
+    ntorowa.particles = ntorowa.particles.filter(p => p.life > 0);
   }
 
   private switchScene(sceneId: SceneId) {

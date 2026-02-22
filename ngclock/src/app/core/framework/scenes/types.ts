@@ -9,7 +9,7 @@
 // App State
 // ─────────────────────────────────────────────────────────────
 
-export type SceneId = 'home' | 'lab' | 'about' | 'anime' | 'fighter' | 'studio';
+export type SceneId = 'home' | 'lab' | 'about' | 'anime' | 'fighter' | 'studio' | 'ntorowa';
 export type ViewMode = '2d' | '3d' | 'split';
 
 export interface NavItem {
@@ -69,6 +69,9 @@ export interface AppState {
 
   /** Emergent systems state (CA, AI agents, evolution) */
   emergent: EmergentState;
+
+  /** Ntorowa jump rope game state */
+  ntorowa: NtorowaState;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -119,6 +122,123 @@ export interface HitEffect {
 }
 
 // ─────────────────────────────────────────────────────────────
+// Ntorowa Jump Rope Game
+// ─────────────────────────────────────────────────────────────
+
+/** Kente-inspired color palette */
+export const KENTE_COLORS = {
+  gold: '#FFD700',
+  orange: '#FF8C00',
+  red: '#DC143C',
+  green: '#228B22',
+  blue: '#1E90FF',
+  purple: '#7B2D8E',
+  black: '#1a1a2e',
+  cream: '#F5F0E1',
+  earth: '#8B4513',
+} as const;
+
+/** Jumper action states */
+export type JumperAction =
+  | 'ground'      // Standing, ready to jump
+  | 'crouch'      // Pre-jump crouch (startup frames)
+  | 'ascending'   // Rising in jump
+  | 'apex'        // At top of jump
+  | 'descending'  // Falling
+  | 'landing'     // Landing recovery
+  | 'hit';        // Hit by rope (stunned)
+
+/** Timing grade for jump evaluation */
+export type TimingGrade = 'perfect' | 'good' | 'ok' | 'miss';
+
+/** Rope rotation state */
+export interface RopeState {
+  /** Current rotation phase (0-3, from clock partition) */
+  phase: number;
+  /** BPM for current difficulty level */
+  bpm: number;
+  /** Accumulated time for smooth interpolation */
+  accumulator: number;
+}
+
+/** Jumper character state */
+export interface JumperState {
+  action: JumperAction;
+  actionTime: number;     // Time in current action (ms)
+  y: number;              // Vertical position (0 = ground, positive = up)
+  vy: number;             // Vertical velocity
+  jumpHeight: number;     // Target jump apex height
+}
+
+/** Timing feedback display */
+export interface TimingFeedback {
+  grade: TimingGrade;
+  time: number;           // When it occurred (for display duration)
+  points: number;
+}
+
+/** Complete Ntorowa game state */
+export interface NtorowaState {
+  // Game objects
+  rope: RopeState;
+  jumper: JumperState;
+
+  // Scoring
+  score: number;
+  combo: number;
+  maxCombo: number;
+  jumpCount: number;
+  perfectCount: number;
+
+  // Feedback
+  feedback: TimingFeedback | null;
+  particles: Particle[];
+
+  // Difficulty progression
+  level: number;
+  jumpsToNextLevel: number;
+
+  // Game state
+  gameOver: boolean;
+  showTutorial: boolean;
+
+  // Timing tracking (for grade calculation)
+  lastJumpTick: number;
+  gradeAwarded: boolean;
+}
+
+/** Timing windows in phase units (0-4 = full rotation) */
+export const TIMING_WINDOWS = {
+  // Phase 2 = rope at bottom (danger zone)
+  // Perfect: when rope is exactly at bottom
+  perfect: { center: 2, range: 0.15 },
+  // Good: slightly off from perfect
+  good: { center: 2, range: 0.3 },
+  // Ok: wider window
+  ok: { center: 2, range: 0.5 },
+} as const;
+
+/** Jumper action frame data */
+export const JUMPER_ACTION_DATA: Record<JumperAction, { duration: number; next: JumperAction }> = {
+  ground: { duration: Infinity, next: 'ground' },
+  crouch: { duration: 60, next: 'ascending' },
+  ascending: { duration: Infinity, next: 'apex' },
+  apex: { duration: 40, next: 'descending' },
+  descending: { duration: Infinity, next: 'landing' },
+  landing: { duration: 80, next: 'ground' },
+  hit: { duration: 600, next: 'ground' },
+};
+
+/** Difficulty levels */
+export const DIFFICULTY_LEVELS = [
+  { level: 1, bpm: 80, jumpsRequired: 10 },
+  { level: 2, bpm: 100, jumpsRequired: 15 },
+  { level: 3, bpm: 120, jumpsRequired: 20 },
+  { level: 4, bpm: 140, jumpsRequired: 25 },
+  { level: 5, bpm: 160, jumpsRequired: Infinity },
+] as const;
+
+// ─────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────
 
@@ -126,6 +246,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'home', label: 'Home', icon: '⏰' },
   { id: 'anime', label: 'Anime', icon: '☯' },
   { id: 'fighter', label: 'Fighter', icon: '👊' },
+  { id: 'ntorowa', label: 'Ntorowa', icon: '🪢' },
   { id: 'studio', label: 'Studio', icon: '🧬' },
   { id: 'lab', label: 'Lab', icon: '🔬' },
   { id: 'about', label: 'About', icon: '📖' },
@@ -150,6 +271,37 @@ export function createAppState(): AppState {
     canvasHeight: 600,
     fighter: createFighterState(),
     emergent: createEmergentState(),
+    ntorowa: createNtorowaState(),
+  };
+}
+
+export function createNtorowaState(): NtorowaState {
+  return {
+    rope: {
+      phase: 0,
+      bpm: 80,
+      accumulator: 0,
+    },
+    jumper: {
+      action: 'ground',
+      actionTime: 0,
+      y: 0,
+      vy: 0,
+      jumpHeight: 120,
+    },
+    score: 0,
+    combo: 0,
+    maxCombo: 0,
+    jumpCount: 0,
+    perfectCount: 0,
+    feedback: null,
+    particles: [],
+    level: 1,
+    jumpsToNextLevel: 10,
+    gameOver: false,
+    showTutorial: true,
+    lastJumpTick: -1,
+    gradeAwarded: false,
   };
 }
 
